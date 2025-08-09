@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Purple Pepe Moon Runner</title>
+<style>
+  :root{
+    --bg1:#0c0220; --bg2:#17053a; --accent:#9c4dff; --accent2:#00ffc8; --danger:#ff5a63; --moon:#2a1f4e;
+  }
+  html,body{height:100%;margin:0;background:linear-gradient(var(--bg1),var(--bg2));color:#fff;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,sans-serif;}
+  #wrap{position:fixed; inset:0; display:flex; align-items:center; justify-content:center;}
+  canvas{max-height:100vh; max-width:100vw; width:min(100vw, 540px); aspect-ratio:9/16; display:block; border-radius:14px;}
+  #hud{position:fixed; top:env(safe-area-inset-top,10px); left:50%; transform:translateX(-50%); width:min(100vw, 540px); padding:8px 10px; box-sizing:border-box; display:flex; justify-content:space-between; pointer-events:none; font-weight:700; text-shadow:0 2px 6px rgba(0,0,0,.6);}
+  .pill{background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.15); padding:6px 10px; border-radius:999px;}
+  #overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.55);}
+  #panel{width:min(92vw, 420px); background:#14092c; border:1px solid rgba(255,255,255,.15); border-radius:16px; padding:18px; box-shadow:0 30px 120px rgba(0,0,0,.6);}
+  #panel h1{margin:.2em 0 .4em;font-size:22px}
+  #panel p{opacity:.85}
+  #panel .btn{display:inline-flex;gap:8px;align-items:center;justify-content:center;padding:10px 14px;border-radius:12px;border:1px solid #6a34d6;background:linear-gradient(180deg,#9c4dff,#6a34d6);color:#fff;font-weight:800;letter-spacing:.3px;box-shadow:0 10px 30px rgba(156,77,255,.35);}
+  #tip{position:fixed; bottom:env(safe-area-inset-bottom,10px); left:50%; transform:translateX(-50%); width:min(100vw, 540px); text-align:center; opacity:.75; font-size:12px;}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="cv"></canvas></div>
+<div id="hud">
+  <div class="pill" id="score">Score: 0</div>
+  <div class="pill" id="best">Best: 0</div>
+</div>
+<div id="overlay">
+  <div id="panel">
+    <h1>💜 Purple Pepe Moon Runner</h1>
+    <p id="final">Berühre zum Start. Wische ← → für Spurwechsel, ↑ für Sprung, ↓ fürs Ducken.</p>
+    <div style="display:flex;gap:10px;justify-content:center;margin-top:10px">
+      <button id="btnPlay" class="btn">▶︎ Spielen</button>
+      <button id="btnAgain" class="btn" style="display:none">↻ Nochmal</button>
+    </div>
+  </div>
+</div>
+<div id="tip">Swipe: ← → Spur • ↑ Sprung • ↓ Duck • Tippen/Pause</div>
+
+<script>
+/* ===== Canvas & Layout ===== */
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+let W=360, H=640;
+function fit(){ // 9:16
+  const maxW = Math.min(window.innerWidth, 540);
+  const maxH = Math.min(window.innerHeight, window.innerWidth*16/9+2);
+  const ar = 9/16;
+  let w = maxW, h = w/ar;
+  if(h>maxH){ h=maxH; w=h*ar; }
+  cv.width = W = Math.round(w*2/2); // keep integers
+  cv.height= H = Math.round(h*2/2);
+}
+addEventListener('resize',fit,{passive:true}); fit();
+
+/* ===== Game State ===== */
+const lanes = [W*0.25, W*0.5, W*0.75];
+let laneIndex = 1;
+const state = {playing:false, paused:false, t:0, speed:4.2, score:0, best: +(localStorage.bestMoon||0)};
+const player = {x:lanes[1], y:H*0.78, w:42, h:52, vy:0, onGround:true, duck:false};
+let obstacles=[], particles=[], stars=[], bear={z:0, bob:0};
+function reset(){
+  laneIndex=1; player.x=lanes[1]; player.y=H*0.78; player.vy=0; player.onGround=true; player.duck=false;
+  state.t=0; state.speed=4.2; state.score=0; obstacles.length=0; particles.length=0; starsSetup(); bear={z:90,bob:0};
+}
+
+/* ===== Input (Touch + Keyboard) ===== */
+let startX=0,startY=0,swiping=false;
+cv.addEventListener('touchstart',e=>{const t=e.touches[0]; startX=t.clientX; startY=t.clientY; swiping=true; if(!state.playing) startGame();},{passive:true});
+cv.addEventListener('touchmove',e=>{
+  if(!swiping) return;
+  const t=e.touches[0], dx=t.clientX-startX, dy=t.clientY-startY;
+  if(Math.abs(dx)>40 || Math.abs(dy)>40){
+    if(Math.abs(dx)>Math.abs(dy)){
+      if(dx>0 && laneIndex<2){ laneIndex++; snapLane(); }
+      if(dx<0 && laneIndex>0){ laneIndex--; snapLane(); }
+    }else{
+      if(dy<-30) jump();
+      if(dy> 30) player.duck=true, setTimeout(()=>player.duck=false,300);
+    }
+    swiping=false;
+  }
+},{passive:true});
+cv.addEventListener('touchend',()=>{swiping=false;},{passive:true});
+addEventListener('keydown',e=>{
+  if(e.key==='ArrowLeft'&&laneIndex>0){laneIndex--;snapLane();}
+  if(e.key==='ArrowRight'&&laneIndex<2){laneIndex++;snapLane();}
+  if(e.key==='ArrowUp') jump();
+  if(e.key==='ArrowDown'){player.duck=true; setTimeout(()=>player.duck=false,250);}
+  if(e.key===' '){ if(!state.playing) startGame(); else state.paused=!state.paused; }
+});
+
+/* ===== Start/Overlay ===== */
+const ov = document.getElementById('overlay'), btnPlay = document.getElementById('btnPlay'), btnAgain=document.getElementById('btnAgain'), final=document.getElementById('final');
+btnPlay.onclick=()=>{startGame();};
+btnAgain.onclick=()=>{ov.style.display='none'; reset(); state.playing=true;};
+function startGame(){ ov.style.display='none'; if(!state.playing){ reset(); state.playing=true; }}
+
+/* ===== Stars & Parallax ===== */
+function starsSetup(){
+  stars = Array.from({length:80},()=>({x:Math.random()*W,y:Math.random()*H, r:Math.random()*1.8+0.3, s:Math.random()*0.6+0.2}));
+}
+
+/* ===== Gameplay Helpers ===== */
+function snapLane(){ player.x = lanes[laneIndex]; }
+function jump(){
+  if(player.onGround){ player.vy = -9.8; player.onGround=false; }
+}
+
+/* ===== Spawner ===== */
+function spawnMeteor(){
+  const li = Math.floor(Math.random()*3);
+  obstacles.push({x:lanes[li], y:-40, w:44, h:44, rot:Math.random()*Math.PI, vx:(Math.random()*2-1)*0.4, vy:state.speed+Math.random()*1.2, type:'meteor'});
+}
+function spawnJunk(){
+  const li = Math.floor(Math.random()*3);
+  obstacles.push({x:lanes[li], y:-50, w:52, h:30, rot:Math.random()*Math.PI, vx:(Math.random()*2-1)*0.5, vy:state.speed+0.8, type:'junk'});
+}
+let spawnTimer=0;
+
+/* ===== Drawing ===== */
+function drawBackground(){
+  // Space gradient
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#0b0120'); g.addColorStop(1,'#19063b'); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // Stars parallax
+  for(const s of stars){
+    s.y += s.s*0.25;
+    if(s.y>H) s.y=0, s.x=Math.random()*W;
+    ctx.fillStyle=`rgba(255,255,255,${0.6+Math.sin((state.t+s.x)*0.02)*0.4})`;
+    ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2); ctx.fill();
+  }
+
+  // Earth (backdrop)
+  const ex = W*0.82, ey = H*0.18, er = 42;
+  const eg = ctx.createRadialGradient(ex-er*0.2, ey-er*0.2, er*0.2, ex,ey,er);
+  eg.addColorStop(0,'#3cf'); eg.addColorStop(1,'#043'); ctx.fillStyle=eg;
+  ctx.beginPath(); ctx.arc(ex,ey,er,0,Math.PI*2); ctx.fill();
+
+  // Moon ground band
+  ctx.fillStyle = 'rgba(255,255,255,.06)';
+  ctx.fillRect(0, H*0.82, W, H*0.18);
+  // Curved horizon
+  ctx.beginPath();
+  ctx.moveTo(0, H*0.78);
+  ctx.quadraticCurveTo(W*0.5, H*0.73, W, H*0.78);
+  ctx.lineTo(W, H); ctx.lineTo(0,H); ctx.closePath();
+  ctx.fillStyle='#24164a'; ctx.fill();
+  // Lane hints
+  ctx.strokeStyle='rgba(255,255,255,.08)'; ctx.lineWidth=2;
+  for(let i=0;i<3;i++){ ctx.beginPath(); ctx.moveTo(lanes[i], H*0.3); ctx.lineTo(lanes[i], H); ctx.stroke(); }
+}
+
+function drawPepeAstro(x,y,duck=false){
+  const s = duck?0.88:1;
+  ctx.save(); ctx.translate(x,y+(duck?8:0)); ctx.scale(s,s);
+  // shadow
+  ctx.fillStyle='rgba(0,0,0,.35)'; ctx.beginPath(); ctx.ellipse(0,28,20,6,0,0,Math.PI*2); ctx.fill();
+  // body suit
+  ctx.fillStyle='#dfe6ff'; rounded(-16, -2, 32, 40, 12);
+  ctx.fillStyle='#b9c3ff'; rounded(-12, 6, 24, 18, 6);
+  // head + helmet
+  ctx.fillStyle='#dfe6ff'; ctx.beginPath(); ctx.arc(0,-18,18,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#9fb3ff'; ctx.lineWidth=4; ctx.beginPath(); ctx.arc(0,-18,20,0,Math.PI*2); ctx.stroke();
+  // purple frog face
+  ctx.fillStyle='#6d31d6'; ctx.beginPath(); ctx.arc(0,-18,15,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#000'; // eyes outline
+  ctx.beginPath(); ctx.arc(-6,-20,6,0,Math.PI*2); ctx.arc(6,-20,6,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#fff'; ctx.beginPath(); ctx.arc(-7,-21,3.2,0,Math.PI*2); ctx.arc(5,-21,3.2,0,Math.PI*2); ctx.fill();
+  // visor shine
+  ctx.strokeStyle='rgba(255,255,255,.6)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(-2,-22,16,-1.2,-0.6); ctx.stroke();
+  // arms/legs hints
+  ctx.fillStyle='#dfe6ff'; rounded(-24,8,14,10,5); rounded(10,8,14,10,5); // gloves
+  rounded(-10,28,12,10,4); rounded(-2,28,12,10,4); // boots
+  ctx.restore();
+}
+function drawBearChaser(){
+  const z = Math.min(110, bear.z+= (state.speed*0.6)); // move up slowly behind player
+  const y = H*0.78 - z*0.35 + Math.sin((state.t)*0.12)*2;
+  const x = lanes[laneIndex];
+  ctx.save(); ctx.globalAlpha=0.75;
+  // tiny bear with helmet
+  ctx.translate(x, y);
+  const k = 0.6;
+  ctx.scale(k,k);
+  // body
+  ctx.fillStyle='#dfe6ff'; rounded(-14,-4,28,28,10);
+  // head
+  ctx.fillStyle='#7a5433'; ctx.beginPath(); ctx.arc(0,-20,12,0,Math.PI*2); ctx.fill();
+  // ears
+  ctx.beginPath(); ctx.arc(-8,-28,5,0,Math.PI*2); ctx.arc(8,-28,5,0,Math.PI*2); ctx.fill();
+  // helmet ring
+  ctx.strokeStyle='#9fb3ff'; ctx.lineWidth=4; ctx.beginPath(); ctx.arc(0,-20,14,0,Math.PI*2); ctx.stroke();
+  ctx.restore();
+}
+function rounded(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); ctx.fill(); }
+
+function drawMeteor(o){
+  ctx.save(); ctx.translate(o.x,o.y); ctx.rotate(o.rot+=0.03);
+  // glow
+  const g = ctx.createRadialGradient(0,0,4,0,0,24);
+  g.addColorStop(0,'#ffcf66'); g.addColorStop(1,'rgba(255,80,80,.05)');
+  ctx.fillStyle=g; ctx.beginPath(); ctx.arc(0,0,24,0,Math.PI*2); ctx.fill();
+  // rock
+  ctx.fillStyle='#c94f3d'; ctx.beginPath(); ctx.ellipse(0,0,18,14,0,0,Math.PI*2); ctx.fill();
+  // tail
+  ctx.rotate(-Math.PI/2); ctx.fillStyle='rgba(255,120,40,.55)'; ctx.beginPath(); ctx.moveTo(-12,0); ctx.quadraticCurveTo(-40,-6,-60,0); ctx.quadraticCurveTo(-30,8,-12,0); ctx.fill();
+  ctx.restore();
+}
+function drawJunk(o){
+  ctx.save(); ctx.translate(o.x,o.y); ctx.rotate(o.rot+=0.02);
+  ctx.fillStyle='#7ec7ff'; rounded(-24,-12,48,24,6);
+  ctx.restore();
+}
+
+/* ===== Loop ===== */
+function step(){
+  requestAnimationFrame(step);
+  if(!state.playing || state.paused){ drawBackground(); drawBearChaser(); drawPepeAstro(player.x, player.y, player.duck); return; }
+  state.t++;
+
+  // difficulty
+  if(state.t%240===0) state.speed = Math.min(state.speed+0.35, 10);
+
+  drawBackground();
+
+  // bear follows a bit behind (cosmetic)
+  drawBearChaser();
+
+  // player physics (moon gravity)
+  player.vy += player.onGround?0:0.35;
+  player.y += player.vy;
+  const groundY = H*0.78 - (player.duck?6:0);
+  if(player.y>=groundY){ player.y=groundY; player.vy=0; player.onGround=true; }
+  else player.onGround=false;
+  // lane x smoothing
+  player.x += (lanes[laneIndex]-player.x)*0.22;
+
+  // spawn
+  spawnTimer -= 1;
+  if(spawnTimer<=0){
+    (Math.random()<0.7?spawnMeteor:spawnJunk)();
+    spawnTimer = Math.max(28, 70 - state.speed*6); // faster with speed
+  }
+
+  // obstacles update
+  for(const o of obstacles){
+    o.y += o.vy; o.x += o.vx||0;
+  }
+  // remove off-screen
+  obstacles = obstacles.filter(o=>o.y< H+60);
+
+  // collisions
+  for(const o of obstacles){
+    const pw = player.duck ? player.w*0.86 : player.w; // smaller hitbox when ducking
+    if (Math.abs(o.x - player.x) < (o.w*0.5 + pw*0.45) && Math.abs(o.y - player.y) < (o.h*0.5 + player.h*0.35)){
+      gameOver();
+      break;
+    }
+  }
+
+  // draw obstacles
+  for(const o of obstacles){ (o.type==='meteor'?drawMeteor:drawJunk)(o); }
+
+  // draw player
+  drawPepeAstro(player.x, player.y, player.duck);
+
+  // score
+  state.score += Math.floor(1+state.speed*0.4);
+  document.getElementById('score').textContent = 'Score: ' + state.score;
+  document.getElementById('best').textContent = 'Best: ' + (state.best=Math.max(state.best,state.score));
+}
+requestAnimationFrame(step);
+
+/* ===== Game Over ===== */
+function gameOver(){
+  state.playing=false;
+  localStorage.bestMoon = state.best;
+  final.innerHTML = `Score: <b>${state.score}</b> · Best: <b>${state.best}</b><br>Wische ←/→/↑/↓ · Tippe ▶︎ für neuen Run`;
+  btnPlay.style.display='none'; btnAgain.style.display='inline-flex';
+  ov.style.display='flex';
+}
+
+/* ===== Pause on visibility change (mobile friendly) ===== */
+document.addEventListener('visibilitychange',()=>{ if(state.playing && document.hidden){ state.paused=true; } });
+
+</script>
+</body>
+</html>
