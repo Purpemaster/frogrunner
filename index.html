@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Purple Pepe Moon Runner</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  html, body {
+    margin: 0; padding: 0;
+    background: #120022;
+    overflow: hidden;
+    touch-action: none; /* Wichtig für Swipes */
+  }
+  canvas {
+    display: block;
+    margin: 0 auto;
+    background: linear-gradient(#120022, #1a0036);
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="400" height="700"></canvas>
+
+<script>
+// === Grundeinstellungen ===
+const c = document.getElementById('game');
+const ctx = c.getContext('2d');
+const lanes = [100, 200, 300]; // X-Positionen für 3 Spuren
+let player = {x: 200, y: 600, w: 40, h: 40, lane: 1, jumpY: 0, jumping: false};
+let speed = 5;
+let gravity = 1;
+let jumpForce = 15;
+let obstacles = [];
+let score = 0;
+let swipeStartX = null, swipeStartY = null;
+
+// === Steuerung ===
+function handleSwipeEnd(x, y) {
+  let dx = x - swipeStartX;
+  let dy = y - swipeStartY;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    if (dx > 30 && player.lane < 2) player.lane++;
+    if (dx < -30 && player.lane > 0) player.lane--;
+  } else {
+    if (dy < -30 && !player.jumping) { // hoch
+      player.jumping = true;
+      player.jumpY = jumpForce;
+    }
+    // ducken könnte hier noch rein
+  }
+  player.x = lanes[player.lane];
+}
+c.addEventListener('touchstart', e => {
+  swipeStartX = e.touches[0].clientX;
+  swipeStartY = e.touches[0].clientY;
+});
+c.addEventListener('touchend', e => {
+  let x = e.changedTouches[0].clientX;
+  let y = e.changedTouches[0].clientY;
+  handleSwipeEnd(x, y);
+});
+
+// === Hindernis-Spawner ===
+function spawnObstacle() {
+  let lane = Math.floor(Math.random() * 3);
+  obstacles.push({x: lanes[lane], y: -40, w: 40, h: 40});
+}
+setInterval(spawnObstacle, 1000);
+
+// === Game Loop ===
+function loop() {
+  ctx.clearRect(0, 0, c.width, c.height);
+
+  // Hintergrund Mondboden (Platzhalter)
+  ctx.fillStyle = "#3a2a6a";
+  ctx.fillRect(0, 650, 400, 50);
+
+  // Spieler
+  if (player.jumping) {
+    player.y -= player.jumpY;
+    player.jumpY -= gravity;
+    if (player.y >= 600) {
+      player.y = 600;
+      player.jumping = false;
+    }
+  }
+  ctx.fillStyle = "#a64dff"; // später Pepe-Sprite
+  ctx.fillRect(player.x - player.w/2, player.y - player.h/2, player.w, player.h);
+
+  // Hindernisse
+  ctx.fillStyle = "#ff4444";
+  for (let o of obstacles) {
+    o.y += speed;
+    ctx.fillRect(o.x - o.w/2, o.y - o.h/2, o.w, o.h);
+    // Kollision
+    if (Math.abs(o.x - player.x) < (o.w+player.w)/2 &&
+        Math.abs(o.y - player.y) < (o.h+player.h)/2) {
+      alert("Game Over! Score: " + score);
+      document.location.reload();
+    }
+  }
+  obstacles = obstacles.filter(o => o.y < 800);
+
+  // Score
+  score++;
+  ctx.fillStyle = "#fff";
+  ctx.font = "20px sans-serif";
+  ctx.fillText("Score: " + score, 10, 30);
+
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
